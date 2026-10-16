@@ -1,4 +1,4 @@
-import type { FuelType, VehicleCategory } from "../config/ghanaRates";
+import { normalizeRates, type FuelType, type GhanaRates, type RatesDoc, type VehicleCategory } from "../config/ghanaRates";
 
 export interface DecodedVehicle {
   make: string;
@@ -60,10 +60,17 @@ export interface HistoryReport {
   theftRecord?: boolean;
   owners?: number;
   events: { date?: string; location?: string; description: string }[];
+  pulledAt?: string;
 }
 
-async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+export interface HistoryStatus {
+  configured: boolean;
+  accessCodeRequired: boolean;
+  report: HistoryReport | null;
+}
+
+async function get<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`);
   return body as T;
@@ -130,5 +137,23 @@ export const api = {
     (await get<{ results?: Complaint[] }>(`/api/complaints?${vehicleQuery(v)}`)).results ?? [],
   ratings: async (v: DecodedVehicle) =>
     (await get<{ results?: SafetyRating[] }>(`/api/ratings?${vehicleQuery(v)}`)).results ?? [],
-  history: (vin: string) => get<{ configured: boolean; report?: HistoryReport }>(`/api/history/${vin}`),
+  history: (vin: string) => get<HistoryStatus>(`/api/history/${vin}`),
+  pullHistory: (vin: string, accessCode: string) =>
+    get<HistoryStatus>(`/api/history/${vin}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accessCode }),
+    }),
+  rates: async (): Promise<RatesDoc | null> => {
+    const doc = await get<Partial<RatesDoc>>("/api/rates");
+    if (!doc.rates) return null;
+    return { rates: normalizeRates(doc.rates), exchangeRate: doc.exchangeRate ?? 0, note: doc.note ?? "", updatedAt: doc.updatedAt ?? "" };
+  },
+  saveRates: (password: string, rates: GhanaRates, exchangeRate: number, note: string) =>
+    get<RatesDoc>("/api/rates", {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${password}` },
+      // JSON.stringify turns Infinity into null, which normalizeRates restores.
+      body: JSON.stringify({ rates, exchangeRate, note }),
+    }),
 };

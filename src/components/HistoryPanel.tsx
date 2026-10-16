@@ -9,6 +9,9 @@ interface Props {
   ratings: SafetyRating[] | null;
   report: HistoryReport | null;
   providerConfigured: boolean | null;
+  accessCodeRequired: boolean;
+  pulling: boolean;
+  onPullReport: (accessCode: string) => void;
   flags: HistoryFlags;
   onFlagsChange: (flags: HistoryFlags) => void;
   errors: Record<string, string>;
@@ -33,6 +36,7 @@ function formatDate(d?: string) {
 export function HistoryPanel(props: Props) {
   const { vin, recalls, complaints, ratings, report, providerConfigured, flags, onFlagsChange, errors } = props;
   const [showAllComplaints, setShowAllComplaints] = useState(false);
+  const [accessCode, setAccessCode] = useState("");
   const serious = (complaints ?? []).filter((c) => c.crash || c.fire || c.numberOfInjuries > 0 || c.numberOfDeaths > 0);
   const shown = showAllComplaints ? complaints ?? [] : serious.slice(0, 5);
 
@@ -43,7 +47,10 @@ export function HistoryPanel(props: Props) {
       <h3>Title, accident and odometer records</h3>
       {report ? (
         <div className="report">
-          <p className="muted">Source: {report.provider}</p>
+          <p className="muted">
+            Source: {report.provider}
+            {report.pulledAt && ` · pulled ${formatDate(report.pulledAt)}`}
+          </p>
           <ul className="facts">
             <li>Title brands: {report.titleBrands.length ? report.titleBrands.map((t) => `${t.brand}${t.state ? ` (${t.state})` : ""}`).join(", ") : "none reported"}</li>
             <li>Accidents: {report.accidents.length || "none reported"}</li>
@@ -63,6 +70,29 @@ export function HistoryPanel(props: Props) {
             </ol>
           )}
         </div>
+      ) : providerConfigured ? (
+        <form
+          className="pull"
+          onSubmit={(e) => {
+            e.preventDefault();
+            props.onPullReport(accessCode);
+          }}
+        >
+          <p className="muted">
+            Title brands (salvage, flood, rebuilt), accidents, theft, odometer readings and auction records from every US state.
+            Each new VIN is a paid report; a VIN pulled before opens for free.
+          </p>
+          {props.accessCodeRequired && (
+            <label className="field">
+              <span>Access code</span>
+              <input type="password" required value={accessCode} onChange={(e) => setAccessCode(e.target.value)} />
+            </label>
+          )}
+          <button type="submit" disabled={props.pulling}>
+            {props.pulling ? "Pulling report…" : "Get full history report"}
+          </button>
+          {errors.history && <p className="notice warn">{errors.history}</p>}
+        </form>
       ) : (
         <p className="muted">
           {providerConfigured === false

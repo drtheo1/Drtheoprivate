@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { DEFAULT_RATES, type GhanaRates } from "./config/ghanaRates";
+import { DEFAULT_RATES, type RatesDoc } from "./config/ghanaRates";
 import { api, type Complaint, type DecodedVehicle, type HistoryReport, type Recall, type SafetyRating } from "./lib/api";
 import { calculateDuty, type DutyInput } from "./lib/duty";
 import { assessEligibility, EMPTY_FLAGS, flagsFromReport, type HistoryFlags } from "./lib/eligibility";
@@ -7,29 +7,6 @@ import { checkVin, type VinCheck } from "./lib/vin";
 import { VehicleCard } from "./components/VehicleCard";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { DutyCalculator } from "./components/DutyCalculator";
-
-const RATES_KEY = "gvdc.rates";
-const FX_KEY = "gvdc.fx";
-
-function loadRates(): GhanaRates {
-  try {
-    const raw = localStorage.getItem(RATES_KEY);
-    if (!raw) return DEFAULT_RATES;
-    // JSON turns Infinity into null; restore it for open ended bands.
-    const parsed = JSON.parse(raw, (k, v) => ((k === "maxCc" || k === "maxYears") && v === null ? Infinity : v));
-    return { ...DEFAULT_RATES, ...parsed };
-  } catch {
-    return DEFAULT_RATES;
-  }
-}
-
-function loadNumber(key: string): number {
-  try {
-    return Number(localStorage.getItem(key)) || 0;
-  } catch {
-    return 0;
-  }
-}
 
 const inSixWeeks = () => new Date(Date.now() + 42 * 864e5).toISOString().slice(0, 10);
 
@@ -44,7 +21,7 @@ const initialInput = (): DutyInput => ({
   hdvUsd: 0,
   freightUsd: 1500,
   insuranceUsd: 0,
-  exchangeRate: loadNumber(FX_KEY),
+  exchangeRate: 0,
 });
 
 const VERDICT_TEXT = {
@@ -62,32 +39,51 @@ export default function App() {
   const [ratings, setRatings] = useState<SafetyRating[] | null>(null);
   const [report, setReport] = useState<HistoryReport | null>(null);
   const [providerConfigured, setProviderConfigured] = useState<boolean | null>(null);
+  const [accessCodeRequired, setAccessCodeRequired] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const [flags, setFlags] = useState<HistoryFlags>(EMPTY_FLAGS);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [input, setInput] = useState<DutyInput>(initialInput);
-  const [rates, setRates] = useState<GhanaRates>(loadRates);
+  const [ratesDoc, setRatesDoc] = useState<RatesDoc | null>(null);
+  const rates = ratesDoc?.rates ?? DEFAULT_RATES;
 
   useEffect(() => {
-    try {
-      localStorage.setItem(RATES_KEY, JSON.stringify(rates));
-    } catch {
-      /* storage unavailable */
-    }
-  }, [rates]);
-  useEffect(() => {
-    try {
-      if (input.exchangeRate > 0) localStorage.setItem(FX_KEY, String(input.exchangeRate));
-    } catch {
-      /* storage unavailable */
-    }
-  }, [input.exchangeRate]);
+    api
+      .rates()
+      .then((doc) => {
+        if (!doc) return;
+        setRatesDoc(doc);
+        // Start from this week's customs rate; the user can still type their own.
+        setInput((prev) => (prev.exchangeRate > 0 ? prev : { ...prev, exchangeRate: doc.exchangeRate }));
+      })
+      .catch(() => {
+        /* fall back to the built in defaults */
+      });
+  }, []);
 
   const result = useMemo(() => calculateDuty(input, rates), [input, rates]);
   const eligibility = useMemo(
     () => assessEligibility(flags, result.blockedByAge, recalls?.length ?? 0),
     [flags, result.blockedByAge, recalls],
   );
+
+  async function pullReport(accessCode: string) {
+    if (!check?.valid) return;
+    setPulling(true);
+    setErrors(({ history: _ignored, ...rest }) => rest);
+    try {
+      const h = await api.pullHistory(check.vin, accessCode);
+      if (h.report) {
+        setReport(h.report);
+        setFlags(flagsFromReport(h.report));
+      }
+    } catch (err) {
+      setErrors((prev) => ({ ...prev, history: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setPulling(false);
+    }
+  }
 
   async function lookup(e: React.FormEvent) {
     e.preventDefault();
@@ -111,6 +107,7 @@ export default function App() {
       .history(c.vin)
       .then((h) => {
         setProviderConfigured(h.configured);
+        setAccessCodeRequired(h.accessCodeRequired);
         if (h.report) {
           setReport(h.report);
           setFlags(flagsFromReport(h.report));
@@ -196,13 +193,23 @@ export default function App() {
                 ratings={ratings}
                 report={report}
                 providerConfigured={providerConfigured}
+                accessCodeRequired={accessCodeRequired}
+                pulling={pulling}
+                onPullReport={pullReport}
                 flags={flags}
                 onFlagsChange={setFlags}
                 errors={errors}
               />
             )}
           </div>
-          <DutyCalculator input={input} onInputChange={setInput} rates={rates} onRatesChange={setRates} result={result} />
+          <DutyCalculator
+            input={input}
+            onInputChange={setInput}
+            rates={rates}
+            ratesUpdatedAt={ratesDoc?.updatedAt ?? ""}
+            ratesNote={ratesDoc?.note ?? ""}
+            result={result}
+          />
         </div>
       </main>
 

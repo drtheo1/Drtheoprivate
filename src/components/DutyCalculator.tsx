@@ -1,13 +1,15 @@
 import { useState } from "react";
 import type { FuelType, GhanaRates, VehicleCategory } from "../config/ghanaRates";
-import { DEFAULT_RATES, RATES_AS_OF, RATE_SOURCES } from "../config/ghanaRates";
+import { RATE_SOURCES, ratesAgeDays } from "../config/ghanaRates";
 import type { DutyInput, DutyResult } from "../lib/duty";
 
 interface Props {
   input: DutyInput;
   onInputChange: (input: DutyInput) => void;
   rates: GhanaRates;
-  onRatesChange: (rates: GhanaRates) => void;
+  /** When the admin last saved the weekly rates; empty when the built in defaults are used. */
+  ratesUpdatedAt: string;
+  ratesNote: string;
   result: DutyResult;
 }
 
@@ -32,23 +34,10 @@ function NumberField(props: { label: string; value: number; onChange: (n: number
   );
 }
 
-const SIMPLE_RATES: [keyof GhanaRates, string][] = [
-  ["vat", "VAT"],
-  ["nhil", "NHIL"],
-  ["getfund", "GETFund levy"],
-  ["ecowasLevy", "ECOWAS levy"],
-  ["auLevy", "AU levy"],
-  ["eximLevy", "EXIM levy"],
-  ["specialImportLevy", "Special import levy"],
-  ["networkCharge", "ICUMS network charge"],
-  ["electricDuty", "Duty on electric cars"],
-];
-
-export function DutyCalculator({ input, onInputChange, rates, onRatesChange, result }: Props) {
-  const [showRates, setShowRates] = useState(false);
+export function DutyCalculator({ input, onInputChange, rates, ratesUpdatedAt, ratesNote, result }: Props) {
+  const [showSources, setShowSources] = useState(false);
   const set = <K extends keyof DutyInput>(key: K, value: DutyInput[K]) => onInputChange({ ...input, [key]: value });
-  const setBand = (i: number, rate: number) =>
-    onRatesChange({ ...rates, passengerDutyBands: rates.passengerDutyBands.map((b, j) => (j === i ? { ...b, rate } : b)) });
+  const age = ratesAgeDays(ratesUpdatedAt);
 
   return (
     <section className="card">
@@ -192,57 +181,31 @@ export function DutyCalculator({ input, onInputChange, rates, onRatesChange, res
         the ICUMS assessment at the port is final.
       </p>
 
-      <button className="link" onClick={() => setShowRates(!showRates)}>
-        {showRates ? "Hide" : "Edit"} rates (last reviewed {RATES_AS_OF})
+      <p className={age === null || age > 7 ? "notice" : "muted small"}>
+        {age === null
+          ? "Rates have not been confirmed this week; built in defaults are in use."
+          : `Rates and exchange rate updated ${age === 0 ? "today" : `${age} day${age === 1 ? "" : "s"} ago`} (${new Date(ratesUpdatedAt).toLocaleDateString()}).`}
+        {age !== null && age > 7 && " They are more than a week old, so check the ICUMS portal before relying on them."}
+        {ratesNote && <span className="block">{ratesNote}</span>}
+        {" "}
+        <span className="block">
+          VAT {pct(rates.vat)}, NHIL {pct(rates.nhil)}, GETFund {pct(rates.getfund)}; car duty{" "}
+          {rates.passengerDutyBands.map((b) => pct(b.rate)).join(" / ")} by engine size.
+        </span>
+      </p>
+      <button className="link" onClick={() => setShowSources(!showSources)}>
+        {showSources ? "Hide" : "Show"} where these figures come from
       </button>
-      {showRates && (
-        <div className="rates">
-          <p className="muted small">
-            Rates change with each budget. Adjust them here if GRA publishes new figures. Changes apply only in this browser.
-          </p>
-          <div className="grid">
-            {rates.passengerDutyBands.map((b, i) => (
-              <NumberField
-                key={i}
-                label={`Car duty % ${i === 0 ? "up to" : `${rates.passengerDutyBands[i - 1].maxCc + 1} to`} ${b.maxCc === Infinity ? "any" : b.maxCc} cc`}
-                value={+(b.rate * 100).toFixed(3)}
-                onChange={(n) => setBand(i, n / 100)}
-                step={0.5}
-              />
-            ))}
-            {(Object.keys(rates.categoryDuty) as (keyof GhanaRates["categoryDuty"])[]).map((k) => (
-              <NumberField
-                key={k}
-                label={`Duty % ${k}`}
-                value={+(rates.categoryDuty[k] * 100).toFixed(3)}
-                onChange={(n) => onRatesChange({ ...rates, categoryDuty: { ...rates.categoryDuty, [k]: n / 100 } })}
-                step={0.5}
-              />
-            ))}
-            {SIMPLE_RATES.map(([k, label]) => (
-              <NumberField
-                key={k}
-                label={`${label} %`}
-                value={+((rates[k] as number) * 100).toFixed(3)}
-                onChange={(n) => onRatesChange({ ...rates, [k]: n / 100 })}
-                step={0.05}
-              />
-            ))}
-          </div>
-          <button className="secondary" onClick={() => onRatesChange(DEFAULT_RATES)}>
-            Reset to defaults
-          </button>
-          <h4>Where these figures come from</h4>
-          <ul className="links">
-            {RATE_SOURCES.map((s) => (
-              <li key={s.url}>
-                <a href={s.url} target="_blank" rel="noreferrer">
-                  {s.label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
+      {showSources && (
+        <ul className="links">
+          {RATE_SOURCES.map((s) => (
+            <li key={s.url}>
+              <a href={s.url} target="_blank" rel="noreferrer">
+                {s.label}
+              </a>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );

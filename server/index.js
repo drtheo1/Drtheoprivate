@@ -1,10 +1,12 @@
-// Small dependency free server: serves the built app from dist/ and proxies the
-// public NHTSA APIs plus an optional paid vehicle history provider under /api.
+// Small dependency free server: serves the built app from dist/, proxies the public
+// NHTSA APIs, stores the weekly duty rates and pulls paid vehicle history reports.
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { fetchHistory } from "./history.js";
+import { mapReport, providerName, pullReport } from "./history.js";
+import { loadHistory, loadRates, pullsToday, recordPull, saveHistory, saveRates } from "./store.js";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
@@ -13,6 +15,12 @@ const NHTSA = "https://api.nhtsa.gov";
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/;
 const CACHE_MS = 6 * 3600 * 1000;
 const cache = new Map();
+const HISTORY_DAILY_LIMIT = Number(process.env.HISTORY_DAILY_LIMIT) || 50;
+const RATE_KEYS = new Set([
+  "passengerDutyBands", "categoryDuty", "electricDuty", "ecowasLevy", "auLevy", "eximLevy",
+  "specialImportLevy", "networkCharge", "vat", "nhil", "getfund", "depreciation", "overagePenalty",
+  "maxImportAgeYears", "ageLimitEffective",
+]);
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -41,25 +49,120 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+function secretMatches(given, expected) {
+  if (!expected || typeof given !== "string") return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+async function readBody(req) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 64 * 1024) throw httpError(413, "Request too large");
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  } catch {
+    throw httpError(400, "Body must be JSON");
+  }
+}
+
+/** Accepts only numbers (null for open ended band limits) and the effective date string. */
+function validateRates(rates) {
+  if (!rates || typeof rates !== "object" || Array.isArray(rates)) throw httpError(400, "rates must be an object");
+  const walk = (value, key) => {
+    if (key === "ageLimitEffective") {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw httpError(400, "ageLimitEffective must be yyyy-mm-dd");
+    } else if (value === null) {
+      if (key !== "maxCc" && key !== "maxYears") throw httpError(400, `${key} cannot be empty`);
+    } else if (typeof value === "number") {
+      if (!Number.isFinite(value) || value < 0) throw httpError(400, `${key} must be a positive number`);
+      if (key !== "maxCc" && key !== "maxYears" && key !== "maxImportAgeYears" && value > 5)
+        throw httpError(400, `${key} looks like a percentage; send rates as fractions (0.15 for 15%)`);
+    } else if (value && typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) walk(v, Array.isArray(value) ? key : k);
+    } else {
+      throw httpError(400, `${key} has an invalid value`);
+    }
+  };
+  for (const key of Object.keys(rates)) if (!RATE_KEYS.has(key)) throw httpError(400, `Unknown rate ${key}`);
+  walk(rates, "rates");
+}
+
+async function handleRates(req) {
+  if (req.method === "GET") return (await loadRates()) ?? { rates: null };
+  if (req.method !== "PUT") throw httpError(405, "Method not allowed");
+  if (!process.env.ADMIN_TOKEN) throw httpError(503, "Set ADMIN_TOKEN on the server to enable rate updates");
+  const auth = req.headers.authorization?.replace(/^Bearer /, "");
+  if (!secretMatches(auth, process.env.ADMIN_TOKEN)) throw httpError(401, "Wrong admin password");
+  const body = await readBody(req);
+  validateRates(body.rates);
+  if (!(Number(body.exchangeRate) > 0)) throw httpError(400, "exchangeRate must be above 0");
+  const doc = {
+    rates: body.rates,
+    exchangeRate: Number(body.exchangeRate),
+    note: typeof body.note === "string" ? body.note.slice(0, 500) : "",
+    updatedAt: new Date().toISOString(),
+  };
+  await saveRates(doc);
+  return doc;
+}
+
+async function handleHistory(req, vin) {
+  const provider = providerName();
+  const cached = await loadHistory(vin);
+  const view = (entry) => ({
+    configured: Boolean(provider),
+    accessCodeRequired: Boolean(process.env.HISTORY_ACCESS_CODE),
+    report: entry ? { ...mapReport(entry.provider, entry.raw), pulledAt: entry.pulledAt } : null,
+  });
+  if (req.method === "GET") return view(cached);
+  if (req.method !== "POST") throw httpError(405, "Method not allowed");
+  if (!provider) throw httpError(503, "No history provider is configured");
+  // A cached report is returned for free; only a new VIN is charged.
+  if (cached) return view(cached);
+
+  const body = await readBody(req);
+  if (process.env.HISTORY_ACCESS_CODE && !secretMatches(body.accessCode, process.env.HISTORY_ACCESS_CODE)) {
+    throw httpError(401, "Wrong access code");
+  }
+  if ((await pullsToday()) >= HISTORY_DAILY_LIMIT) {
+    throw httpError(429, "Daily report limit reached. Raise HISTORY_DAILY_LIMIT or try tomorrow.");
+  }
+  const raw = await pullReport(provider, vin);
+  await recordPull();
+  const entry = { provider, vin, pulledAt: new Date().toISOString(), raw };
+  await saveHistory(vin, entry);
+  return view(entry);
+}
+
 function vehicleParams(q) {
   const make = q.get("make")?.trim();
   const model = q.get("model")?.trim();
   const year = q.get("year")?.trim();
   if (!make || !model || !/^\d{4}$/.test(year ?? "")) {
-    throw Object.assign(new Error("make, model and a four digit year are required"), { status: 400 });
+    throw httpError(400, "make, model and a four digit year are required");
   }
   return { make: encodeURIComponent(make), model: encodeURIComponent(model), year };
 }
 
-async function handleApi(url) {
+async function handleApi(req, url) {
   const parts = url.pathname.split("/").filter(Boolean); // ["api", route, arg]
   const route = parts[1];
   const q = url.searchParams;
 
+  if (route === "rates") return handleRates(req);
   if (route === "decode" || route === "history") {
     const vin = (parts[2] ?? "").toUpperCase();
-    if (!VIN_RE.test(vin)) throw Object.assign(new Error("Invalid VIN"), { status: 400 });
-    if (route === "history") return fetchHistory(vin);
+    if (!VIN_RE.test(vin)) throw httpError(400, "Invalid VIN");
+    if (route === "history") return handleHistory(req, vin);
+    if (req.method !== "GET") throw httpError(405, "Method not allowed");
     const data = await getJson(`${VPIC}/DecodeVinValuesExtended/${vin}?format=json`);
     return data.Results?.[0] ?? {};
   }
@@ -80,7 +183,7 @@ async function handleApi(url) {
     );
     return { results: details.filter(Boolean) };
   }
-  throw Object.assign(new Error("Not found"), { status: 404 });
+  throw httpError(404, "Not found");
 }
 
 async function serveStatic(url, res) {
@@ -105,11 +208,11 @@ http
   .createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.startsWith("/api/")) return serveStatic(url, res);
-    if (req.method !== "GET") return send(res, 405, { error: "Method not allowed" });
     try {
-      send(res, 200, await handleApi(url));
+      send(res, 200, await handleApi(req, url));
     } catch (err) {
-      send(res, err.status ?? 500, { error: err.message ?? "Server error" });
+      if (!err.status) console.error(err);
+      send(res, err.status ?? 500, { error: err.status ? err.message : "Server error" });
     }
   })
   .listen(PORT, () => console.log(`Ghana Vehicle Duty Checker on http://localhost:${PORT}`));

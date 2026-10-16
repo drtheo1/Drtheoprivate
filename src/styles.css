@@ -180,3 +180,12 @@ footer { max-width: 1200px; margin: 0 auto; padding: 1rem 16px 3rem; }
   .search, button, .flags { display: none; }
   .card { break-inside: avoid; }
 }
+
+.pull { display: grid; gap: 0.75rem; justify-items: start; margin-bottom: 0.5rem; }
+.pull .field { width: min(100%, 280px); }
+.notice.ok { background: var(--ok-bg); color: var(--ok); }
+.admin { max-width: 900px; }
+.admin h1 { font-size: 1.5rem; }
+.admin > .card > .field { margin: 0.75rem 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; margin-top: 1.5rem; }
+.actions .field { flex: 1 1 220px; }

@@ -109,3 +109,35 @@ export const RATE_SOURCES = [
   },
   { label: "Ghana Revenue Authority (official)", url: "https://gra.gov.gh/" },
 ];
+
+/** Rates as stored on the server, updated weekly from the admin page. */
+export interface RatesDoc {
+  rates: GhanaRates;
+  exchangeRate: number;
+  note: string;
+  updatedAt: string;
+}
+
+/** JSON has no Infinity, so open ended bands travel as null. Restore them and fill gaps from the defaults. */
+export function normalizeRates(raw: unknown): GhanaRates {
+  if (!raw || typeof raw !== "object") return DEFAULT_RATES;
+  const revive = <T extends { rate: number }>(bands: unknown, key: "maxCc" | "maxYears", fallback: T[]): T[] =>
+    Array.isArray(bands) && bands.length
+      ? bands.map((b) => ({ ...b, [key]: b[key] === null || b[key] === undefined ? Infinity : b[key] }))
+      : fallback;
+  const r = raw as Partial<GhanaRates>;
+  return {
+    ...DEFAULT_RATES,
+    ...r,
+    categoryDuty: { ...DEFAULT_RATES.categoryDuty, ...r.categoryDuty },
+    passengerDutyBands: revive(r.passengerDutyBands, "maxCc", DEFAULT_RATES.passengerDutyBands),
+    depreciation: revive(r.depreciation, "maxYears", DEFAULT_RATES.depreciation),
+    overagePenalty: revive(r.overagePenalty, "maxYears", DEFAULT_RATES.overagePenalty),
+  };
+}
+
+/** Days since the rates were last saved; rates older than a week should be refreshed. */
+export function ratesAgeDays(updatedAt: string | undefined, now = Date.now()): number | null {
+  const t = Date.parse(updatedAt ?? "");
+  return Number.isFinite(t) ? Math.floor((now - t) / 864e5) : null;
+}
