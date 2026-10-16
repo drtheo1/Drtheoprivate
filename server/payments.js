@@ -2,7 +2,8 @@
 // Customers pay with mobile money or card on Paystack's page and come back with a
 // reference; the server verifies it and hands the browser an access token for that VIN.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { loadPurchase, savePurchase } from "./store.js";
+import { listPurchases, loadHistory, loadPurchase, savePurchase } from "./store.js";
+import { TERMS_VERSION } from "../src/config/business.ts";
 
 const API = () => process.env.PAYSTACK_API_BASE ?? "https://api.paystack.co";
 const REFERENCE_RE = /^gvdc_[a-z0-9]{8,40}$/;
@@ -81,10 +82,12 @@ async function paystack(path, init = {}) {
   return body.data;
 }
 
-export async function startCheckout({ vin, product, email }, appUrl) {
+export async function startCheckout({ vin, product, email, agreedToTerms }, appUrl) {
   if (!paymentsEnabled()) throw httpError(503, "Payments are not set up yet.");
   if (!GRANTS[product]) throw httpError(400, "Unknown product");
   if (typeof email !== "string" || !EMAIL_RE.test(email) || email.length > 200) throw httpError(400, "Enter a valid email for your receipt");
+
+  if (agreedToTerms !== true) throw httpError(400, "Please accept the Terms of Service to continue");
 
   const price = prices()[product];
   const reference = `gvdc_${Date.now().toString(36)}${randomBytes(6).toString("hex")}`;
@@ -98,6 +101,9 @@ export async function startCheckout({ vin, product, email }, appUrl) {
     email,
     status: "pending",
     createdAt: new Date().toISOString(),
+    // Kept as evidence if a customer disputes the charge with their bank or network.
+    termsVersion: TERMS_VERSION,
+    agreedToTermsAt: new Date().toISOString(),
   };
   await savePurchase(purchase);
   const data = await paystack("/transaction/initialize", {
@@ -115,7 +121,8 @@ export async function startCheckout({ vin, product, email }, appUrl) {
 }
 
 async function markPaid(purchase, tx) {
-  if (purchase.status === "paid") return purchase;
+  // Only a pending purchase can become paid; a refunded one must stay revoked.
+  if (purchase.status !== "pending") return purchase;
   if (tx.status !== "success") return purchase;
   if (tx.currency !== purchase.currency || Number(tx.amount) < purchase.amount) {
     console.error(`Paystack amount mismatch for ${purchase.reference}`);
@@ -135,6 +142,7 @@ export async function verifyCheckout(reference) {
     if (!paymentsEnabled()) throw httpError(503, "Payments are not set up yet.");
     purchase = await markPaid(purchase, await paystack(`/transaction/verify/${encodeURIComponent(reference)}`));
   }
+  if (purchase.status === "refunded") throw httpError(410, "This purchase was refunded and is no longer active.");
   if (purchase.status !== "paid") throw httpError(402, "Payment has not gone through yet. If you were charged, wait a minute and try again.");
   return { token: tokenFor(reference), vin: purchase.vin, grants: purchase.grants, paidAt: purchase.paidAt };
 }
@@ -151,4 +159,32 @@ export async function handleWebhook(rawBody, signature) {
     if (purchase) await markPaid(purchase, event.data);
   }
   return { received: true };
+}
+
+/** Admin search by payment reference, email or VIN, newest first. */
+export async function searchPurchases(query) {
+  const q = String(query ?? "").trim().toLowerCase();
+  const all = await listPurchases();
+  const hits = all
+    .filter((p) => !q || p.reference === q || p.email?.toLowerCase() === q || p.vin?.toLowerCase() === q)
+    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))
+    .slice(0, 50);
+  // Whether the history report was actually delivered matters when deciding on a refund.
+  return Promise.all(
+    hits.map(async (p) => {
+      const report = p.grants.includes("history") ? await loadHistory(p.vin) : null;
+      return { ...p, reportPulledAt: report?.pulledAt ?? null };
+    }),
+  );
+}
+
+/** After refunding in the Paystack dashboard, revoke the access the purchase gave. */
+export async function revokePurchase(reference, reason) {
+  if (!REFERENCE_RE.test(String(reference ?? ""))) throw httpError(400, "Invalid reference");
+  const p = await loadPurchase(reference);
+  if (!p) throw httpError(404, "Payment not found");
+  if (p.status !== "paid") throw httpError(409, `This payment is ${p.status}, so there is nothing to revoke`);
+  const revoked = { ...p, status: "refunded", refundedAt: new Date().toISOString(), refundReason: String(reason ?? "").slice(0, 500) };
+  await savePurchase(revoked);
+  return revoked;
 }

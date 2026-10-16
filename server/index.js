@@ -6,7 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mapReport, providerName, pullReport } from "./history.js";
-import { handleWebhook, hasAccess, prices, startCheckout, verifyCheckout } from "./payments.js";
+import { handleWebhook, hasAccess, prices, revokePurchase, searchPurchases, startCheckout, verifyCheckout } from "./payments.js";
 import { loadHistory, loadRates, pullsToday, recordPull, saveHistory, saveRates } from "./store.js";
 import { calculateDuty } from "../src/lib/duty.ts";
 import { DEFAULT_RATES, normalizeRates } from "../src/config/ghanaRates.ts";
@@ -223,6 +223,14 @@ async function handleApi(req, url) {
 
   if (route === "rates") return handleRates(req);
   if (route === "prices") return prices();
+  if (route === "admin") {
+    if (!process.env.ADMIN_TOKEN || !isAdmin(req)) throw httpError(401, "Wrong admin password");
+    if (parts[2] === "purchases" && !parts[3] && req.method === "GET") return { purchases: await searchPurchases(q.get("q")) };
+    if (parts[2] === "purchases" && parts[4] === "revoke" && req.method === "POST") {
+      return revokePurchase(parts[3], (await readBody(req)).reason);
+    }
+    throw httpError(404, "Not found");
+  }
   if (route === "paystack" && parts[2] === "webhook" && req.method === "POST") {
     return handleWebhook(await readRaw(req), req.headers["x-paystack-signature"]);
   }
@@ -231,7 +239,7 @@ async function handleApi(req, url) {
     if (parts[2] === "verify") return verifyCheckout(body.reference);
     const vin = String(body.vin ?? "").toUpperCase();
     if (!VIN_RE.test(vin)) throw httpError(400, "Invalid VIN");
-    return startCheckout({ vin, product: body.product, email: body.email }, appUrl(req));
+    return startCheckout({ vin, product: body.product, email: body.email, agreedToTerms: body.agreedToTerms }, appUrl(req));
   }
   if (route === "duty" && req.method === "POST") {
     const body = await readBody(req);

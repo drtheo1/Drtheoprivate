@@ -91,6 +91,23 @@ export interface Prices {
   dutyAccessDays: number;
 }
 
+export interface AdminPurchase {
+  reference: string;
+  vin: string;
+  product: Product;
+  grants: ("duty" | "history")[];
+  amount: number;
+  currency: string;
+  email: string;
+  status: "pending" | "paid" | "refunded";
+  createdAt: string;
+  paidAt?: string;
+  refundedAt?: string;
+  refundReason?: string;
+  termsVersion?: string;
+  reportPulledAt: string | null;
+}
+
 export interface Purchase {
   token: string;
   vin: string;
@@ -176,11 +193,11 @@ export const api = {
       body: JSON.stringify({ vin, input }),
     }),
   prices: () => get<Prices>("/api/prices"),
-  checkout: (vin: string, product: Product, email: string) =>
+  checkout: (vin: string, product: Product, email: string, agreedToTerms: boolean) =>
     get<{ authorizationUrl: string; reference: string }>("/api/checkout", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ vin, product, email }),
+      body: JSON.stringify({ vin, product, email, agreedToTerms }),
     }),
   verify: (reference: string) =>
     get<Purchase>("/api/checkout/verify", {
@@ -189,6 +206,16 @@ export const api = {
       body: JSON.stringify({ reference }),
     }),
   rates: () => get<PublicRates>("/api/rates"),
+  adminPurchases: (password: string, query: string) =>
+    get<{ purchases: AdminPurchase[] }>(`/api/admin/purchases?q=${encodeURIComponent(query)}`, {
+      headers: { authorization: `Bearer ${password}` },
+    }),
+  revokePurchase: (password: string, reference: string, reason: string) =>
+    get<AdminPurchase>(`/api/admin/purchases/${encodeURIComponent(reference)}/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${password}` },
+      body: JSON.stringify({ reason }),
+    }),
   adminRates: async (password: string): Promise<RatesDoc | null> => {
     const doc = await get<Partial<RatesDoc>>("/api/rates", { headers: { authorization: `Bearer ${password}` } });
     if (!doc.rates) return null;

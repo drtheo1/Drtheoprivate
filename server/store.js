@@ -1,6 +1,6 @@
 // File based storage for the weekly rates and for paid history reports.
 // On a cloud host, point DATA_DIR at a persistent disk or the data is lost on redeploy.
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,3 +52,14 @@ export async function pullsToday() {
 const purchaseFile = (reference) => path.join(DATA_DIR, "purchases", `${reference}.json`);
 export const loadPurchase = (reference) => readJson(purchaseFile(reference));
 export const savePurchase = (purchase) => writeJson(purchaseFile(purchase.reference), purchase);
+
+export async function listPurchases() {
+  let files = [];
+  try {
+    files = await readdir(path.join(DATA_DIR, "purchases"));
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  const all = await Promise.all(files.filter((f) => f.endsWith(".json")).map((f) => readJson(path.join(DATA_DIR, "purchases", f))));
+  return all.filter(Boolean);
+}

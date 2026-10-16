@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { DEFAULT_RATES, type AgeBand, type GhanaRates } from "../config/ghanaRates";
 import { api } from "../lib/api";
+import { AdminPurchases } from "./AdminPurchases";
 
 const PASSWORD_KEY = "gvdc.admin";
 
@@ -60,6 +61,7 @@ export function AdminPage() {
   const [saving, setSaving] = useState(false);
 
   const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState<"rates" | "payments">("rates");
 
   async function signIn(pw: string) {
     setStatus(null);
@@ -134,83 +136,95 @@ export function AdminPage() {
       <p>
         <a href="#">Back to the checker</a>
       </p>
-      <form className="card" onSubmit={save}>
-        <h1>Weekly rate update</h1>
-        <p className="muted">
-          {updatedAt ? `Last saved ${new Date(updatedAt).toLocaleString()}.` : "No rates saved yet; the built in defaults are in use."} Check
-          the ICUMS portal for the customs exchange rate and any GRA notices, then save.
-        </p>
+      <div className="tabs" role="tablist">
+        <button role="tab" aria-selected={tab === "rates"} className={tab === "rates" ? "on" : ""} onClick={() => setTab("rates")}>
+          Weekly rates
+        </button>
+        <button role="tab" aria-selected={tab === "payments"} className={tab === "payments" ? "on" : ""} onClick={() => setTab("payments")}>
+          Payments and refunds
+        </button>
+      </div>
+      {tab === "payments" ? (
+        <AdminPurchases password={password} />
+      ) : (
+        <form className="card" onSubmit={save}>
+          <h1>Weekly rate update</h1>
+          <p className="muted">
+            {updatedAt ? `Last saved ${new Date(updatedAt).toLocaleString()}.` : "No rates saved yet; the built in defaults are in use."} Check
+            the ICUMS portal for the customs exchange rate and any GRA notices, then save.
+          </p>
 
-        <h3>This week</h3>
-        <div className="grid">
+          <h3>This week</h3>
+          <div className="grid">
+            <label className="field">
+              <span>Customs exchange rate (GH₵ per USD)</span>
+              <input type="number" inputMode="decimal" min={0} step={0.0001} required value={exchangeRate || ""} onChange={(e) => setExchangeRate(Number(e.target.value))} />
+            </label>
+          </div>
           <label className="field">
-            <span>Customs exchange rate (GH₵ per USD)</span>
-            <input type="number" inputMode="decimal" min={0} step={0.0001} required value={exchangeRate || ""} onChange={(e) => setExchangeRate(Number(e.target.value))} />
+            <span>Note shown to users (optional)</span>
+            <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Rates confirmed with GRA notice of 12 October" />
           </label>
-        </div>
-        <label className="field">
-          <span>Note shown to users (optional)</span>
-          <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Rates confirmed with GRA notice of 12 October" />
-        </label>
 
-        <h3>Import duty</h3>
-        <div className="grid">
-          {rates.passengerDutyBands.map((b, i) => (
-            <PercentField
-              key={i}
-              label={`Cars ${i === 0 ? "up to" : `${rates.passengerDutyBands[i - 1].maxCc + 1} to`} ${b.maxCc === Infinity ? "any size" : `${b.maxCc} cc`} %`}
-              value={b.rate}
-              onChange={(n) => setBand("passengerDutyBands", i, n)}
-            />
-          ))}
-          {(Object.keys(rates.categoryDuty) as (keyof GhanaRates["categoryDuty"])[]).map((k) => (
-            <PercentField key={k} label={`${CATEGORY_LABELS[k]} %`} value={rates.categoryDuty[k]} onChange={(n) => setRates({ ...rates, categoryDuty: { ...rates.categoryDuty, [k]: n } })} />
-          ))}
-        </div>
+          <h3>Import duty</h3>
+          <div className="grid">
+            {rates.passengerDutyBands.map((b, i) => (
+              <PercentField
+                key={i}
+                label={`Cars ${i === 0 ? "up to" : `${rates.passengerDutyBands[i - 1].maxCc + 1} to`} ${b.maxCc === Infinity ? "any size" : `${b.maxCc} cc`} %`}
+                value={b.rate}
+                onChange={(n) => setBand("passengerDutyBands", i, n)}
+              />
+            ))}
+            {(Object.keys(rates.categoryDuty) as (keyof GhanaRates["categoryDuty"])[]).map((k) => (
+              <PercentField key={k} label={`${CATEGORY_LABELS[k]} %`} value={rates.categoryDuty[k]} onChange={(n) => setRates({ ...rates, categoryDuty: { ...rates.categoryDuty, [k]: n } })} />
+            ))}
+          </div>
 
-        <h3>Levies and taxes</h3>
-        <div className="grid">
-          {SIMPLE.map(([k, label]) => (
-            <PercentField key={k} label={label} value={rates[k] as number} onChange={(n) => setRates({ ...rates, [k]: n })} />
-          ))}
-        </div>
+          <h3>Levies and taxes</h3>
+          <div className="grid">
+            {SIMPLE.map(([k, label]) => (
+              <PercentField key={k} label={label} value={rates[k] as number} onChange={(n) => setRates({ ...rates, [k]: n })} />
+            ))}
+          </div>
 
-        <h3>HDV depreciation by age</h3>
-        <div className="grid">
-          {rates.depreciation.map((_, i) => (
-            <PercentField key={i} label={ageLabel(rates.depreciation, i)} value={rates.depreciation[i].rate} onChange={(n) => setBand("depreciation", i, n)} />
-          ))}
-        </div>
+          <h3>HDV depreciation by age</h3>
+          <div className="grid">
+            {rates.depreciation.map((_, i) => (
+              <PercentField key={i} label={ageLabel(rates.depreciation, i)} value={rates.depreciation[i].rate} onChange={(n) => setBand("depreciation", i, n)} />
+            ))}
+          </div>
 
-        <h3>Overage penalty by age</h3>
-        <div className="grid">
-          {rates.overagePenalty.map((_, i) => (
-            <PercentField key={i} label={ageLabel(rates.overagePenalty, i)} value={rates.overagePenalty[i].rate} onChange={(n) => setBand("overagePenalty", i, n)} />
-          ))}
-        </div>
+          <h3>Overage penalty by age</h3>
+          <div className="grid">
+            {rates.overagePenalty.map((_, i) => (
+              <PercentField key={i} label={ageLabel(rates.overagePenalty, i)} value={rates.overagePenalty[i].rate} onChange={(n) => setBand("overagePenalty", i, n)} />
+            ))}
+          </div>
 
-        <h3>Age limit</h3>
-        <div className="grid">
-          <label className="field">
-            <span>Maximum age on arrival (years)</span>
-            <input type="number" min={1} value={rates.maxImportAgeYears} onChange={(e) => setRates({ ...rates, maxImportAgeYears: Number(e.target.value) })} />
-          </label>
-          <label className="field">
-            <span>Age limit applies from</span>
-            <input type="date" required value={rates.ageLimitEffective} onChange={(e) => setRates({ ...rates, ageLimitEffective: e.target.value })} />
-          </label>
-        </div>
+          <h3>Age limit</h3>
+          <div className="grid">
+            <label className="field">
+              <span>Maximum age on arrival (years)</span>
+              <input type="number" min={1} value={rates.maxImportAgeYears} onChange={(e) => setRates({ ...rates, maxImportAgeYears: Number(e.target.value) })} />
+            </label>
+            <label className="field">
+              <span>Age limit applies from</span>
+              <input type="date" required value={rates.ageLimitEffective} onChange={(e) => setRates({ ...rates, ageLimitEffective: e.target.value })} />
+            </label>
+          </div>
 
-        <div className="actions">
-          <button type="submit" disabled={saving}>
-            {saving ? "Saving…" : "Save rates"}
-          </button>
-          <button type="button" className="secondary" onClick={() => setRates(DEFAULT_RATES)}>
-            Load built in defaults
-          </button>
-        </div>
-        {status && <p className={status.ok ? "notice ok" : "notice warn"}>{status.text}</p>}
-      </form>
+          <div className="actions">
+            <button type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save rates"}
+            </button>
+            <button type="button" className="secondary" onClick={() => setRates(DEFAULT_RATES)}>
+              Load built in defaults
+            </button>
+          </div>
+          {status && <p className={status.ok ? "notice ok" : "notice warn"}>{status.text}</p>}
+        </form>
+      )}
     </main>
   );
 }

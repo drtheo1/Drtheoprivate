@@ -330,7 +330,8 @@ export default function App() {
 
       <footer className="muted small">
         Estimates only, not tax advice. Vehicle data from the US NHTSA; history reports through VinAudit. Payments by Paystack.
-        Confirm duty with the Ghana Revenue Authority and your clearing agent before you buy.
+        Confirm duty with the Ghana Revenue Authority and your clearing agent before you buy.{" "}
+        <a href="#terms">Terms of Service and refund policy</a>
       </footer>
     </>
   );

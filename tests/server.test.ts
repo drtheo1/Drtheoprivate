@@ -98,7 +98,7 @@ const dutyInput = {
 };
 
 async function buy(vin: string, product: string) {
-  const res = await post("/api/checkout", { vin, product, email: "buyer@example.com" });
+  const res = await post("/api/checkout", { vin, product, email: "buyer@example.com", agreedToTerms: true });
   expect(res.status).toBe(200);
   const { reference, authorizationUrl } = await res.json();
   expect(authorizationUrl).toContain(reference);
@@ -135,7 +135,9 @@ describe("payments", () => {
   it("refuses the duty estimate and history report until paid", async () => {
     expect((await post("/api/duty", { vin: VIN, input: dutyInput })).status).toBe(402);
     expect((await post(`/api/history/${VIN}`, {})).status).toBe(402);
-    expect((await post("/api/checkout", { vin: VIN, product: "duty", email: "bad" })).status).toBe(400);
+    expect((await post("/api/checkout", { vin: VIN, product: "duty", email: "bad", agreedToTerms: true })).status).toBe(400);
+    // No checkout without accepting the terms.
+    expect((await post("/api/checkout", { vin: VIN, product: "duty", email: "buyer@example.com" })).status).toBe(400);
   });
 
   it("charges the price in pesewas and only unlocks after Paystack confirms", async () => {
@@ -185,5 +187,40 @@ describe("payments", () => {
 
     // Without a token the cached report stays hidden.
     expect((await (await fetch(`${BASE}/api/history/${VIN}`)).json()).report).toBeNull();
+  });
+});
+
+const admin = (p: string, init: RequestInit = {}) =>
+  fetch(`${BASE}${p}`, { ...init, headers: { authorization: "Bearer secret", ...(init.headers ?? {}) } });
+
+describe("refunds", () => {
+  it("lets the admin find payments and see the terms the customer accepted", async () => {
+    expect((await fetch(`${BASE}/api/admin/purchases?q=`)).status).toBe(401);
+    const { purchases } = await (await admin(`/api/admin/purchases?q=${VIN}`)).json();
+    expect(purchases.length).toBeGreaterThan(0);
+    const bundle = purchases.find((p: { product: string }) => p.product === "bundle");
+    expect(bundle).toMatchObject({ status: "paid", email: "buyer@example.com", termsVersion: expect.any(String) });
+    expect(bundle.reportPulledAt).toBeTruthy();
+    const byEmail = await (await admin("/api/admin/purchases?q=BUYER@example.com")).json();
+    expect(byEmail.purchases.length).toBe(purchases.length + 1); // includes the other VIN
+  });
+
+  it("revokes access after a refund and does not let a late webhook restore it", async () => {
+    const ref = await buy(OTHER_VIN, "duty");
+    transactions.get(ref)!.status = "success";
+    const { token } = await (await post("/api/checkout/verify", { reference: ref })).json();
+    expect((await post("/api/duty", { vin: OTHER_VIN, input: dutyInput }, { "x-access-token": token })).status).toBe(200);
+
+    const revoked = await admin(`/api/admin/purchases/${ref}/revoke`, { method: "POST", body: JSON.stringify({ reason: "Charged twice" }) });
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toMatchObject({ status: "refunded", refundReason: "Charged twice" });
+    expect((await post("/api/duty", { vin: OTHER_VIN, input: dutyInput }, { "x-access-token": token })).status).toBe(402);
+    expect((await post("/api/checkout/verify", { reference: ref })).status).toBe(410);
+
+    const body = JSON.stringify({ event: "charge.success", data: { reference: ref, status: "success", amount: 2000, currency: "GHS", id: 3 } });
+    const sig = createHmac("sha512", PAYSTACK_KEY).update(body).digest("hex");
+    await fetch(`${BASE}/api/paystack/webhook`, { method: "POST", headers: { "x-paystack-signature": sig }, body });
+    expect((await post("/api/duty", { vin: OTHER_VIN, input: dutyInput }, { "x-access-token": token })).status).toBe(402);
+    expect((await admin(`/api/admin/purchases/${ref}/revoke`, { method: "POST", body: "{}" })).status).toBe(409);
   });
 });

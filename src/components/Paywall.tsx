@@ -28,6 +28,7 @@ export function Paywall({ vin, prices, offers, what, onPurchase }: Props) {
       return "";
     }
   });
+  const [agreed, setAgreed] = useState(false);
   const [reference, setReference] = useState("");
   const [showRestore, setShowRestore] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -58,7 +59,7 @@ export function Paywall({ vin, prices, offers, what, onPurchase }: Props) {
       /* storage unavailable */
     }
     try {
-      const { authorizationUrl } = await api.checkout(vin!, product, email.trim());
+      const { authorizationUrl } = await api.checkout(vin!, product, email.trim(), agreed);
       window.location.assign(authorizationUrl);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -97,6 +98,20 @@ export function Paywall({ vin, prices, offers, what, onPurchase }: Props) {
         <label className="field">
           <span>Email for your receipt</span>
           <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        </label>
+        <label className="agree">
+          <input type="checkbox" required checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
+          <span>
+            I have checked the VIN and agree to the{" "}
+            <a href="#terms" target="_blank" rel="noreferrer">
+              Terms of Service
+            </a>
+            . Results are estimates, and{" "}
+            <a href="#refunds" target="_blank" rel="noreferrer">
+              all sales are final
+            </a>{" "}
+            once delivered.
+          </span>
         </label>
         <button type="submit" disabled={busy}>
           {busy ? "Opening Paystack…" : `Pay ${cedis(prices[product])} with mobile money or card`}

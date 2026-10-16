@@ -72,6 +72,27 @@ Setting up Paystack:
 
 Payment records are saved in `DATA_DIR/purchases/`, one file per payment, with the VIN, product, amount and email.
 
+## Terms of Service and refunds
+
+The Terms of Service are at `/#terms` and are linked from every checkout and from the footer. Customers must tick a box agreeing to them before they can pay, and each payment record stores the date of the terms they accepted. That record is your evidence if a customer disputes a charge with their bank or mobile money network.
+
+Before going live:
+
+1. Fill in your business name, registration number, address, support email and phone in `src/config/business.ts`.
+2. Have a Ghanaian lawyer review the terms. They were written as a starting point, not as legal advice.
+3. Register with the Data Protection Commission, since the site stores customer emails (Data Protection Act, 2012, Act 843).
+
+The refund policy says all sales are final once results are shown. You review refunds yourself, and only for two cases: a charge where nothing was delivered because of a fault on your side, or a double charge. Requests must come within 7 days (change `REFUND_WINDOW_DAYS` in the same file).
+
+To refund a customer:
+
+1. Open `/#admin`, sign in, and choose **Payments and refunds**.
+2. Search by the payment reference, the customer's email or the VIN. Each payment shows the amount, when it was paid, the terms version accepted, and whether the history report was actually delivered.
+3. Refund the payment in the Paystack dashboard.
+4. Click **Revoke after refund** and enter the reason. The customer loses access to the results on every device, and a late payment notice from Paystack cannot switch it back on.
+
+When you change the terms, update `TERMS_VERSION` in `src/config/business.ts` so new payments record the new version.
+
 ## Weekly rate update
 
 Open `/#admin` on the deployed site, enter this week's customs exchange rate from the ICUMS portal, change any duty or levy that GRA has announced, add a short note and save with the admin password. Everyone using the app sees the new figures at once, with the date they were saved. If the rates are more than seven days old, the calculator warns users to check ICUMS.

@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { AdminPage } from "./components/AdminPage";
+import { TermsPage } from "./components/TermsPage";
 import "./styles.css";
 
 function Root() {
@@ -11,7 +12,10 @@ function Root() {
     window.addEventListener("hashchange", onChange);
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
-  return hash === "#admin" ? <AdminPage /> : <App />;
+  useEffect(() => window.scrollTo(0, 0), [hash]);
+  if (hash === "#admin") return <AdminPage />;
+  if (hash === "#terms" || hash === "#refunds") return <TermsPage />;
+  return <App />;
 }
 
 createRoot(document.getElementById("root")!).render(
