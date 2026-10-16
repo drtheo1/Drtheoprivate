@@ -1,16 +1,18 @@
-import { useState } from "react";
-import type { FuelType, GhanaRates, VehicleCategory } from "../config/ghanaRates";
+import { useState, type ReactNode } from "react";
+import type { FuelType, VehicleCategory } from "../config/ghanaRates";
 import { RATE_SOURCES, ratesAgeDays } from "../config/ghanaRates";
 import type { DutyInput, DutyResult } from "../lib/duty";
 
 interface Props {
   input: DutyInput;
   onInputChange: (input: DutyInput) => void;
-  rates: GhanaRates;
   /** When the admin last saved the weekly rates; empty when the built in defaults are used. */
   ratesUpdatedAt: string;
   ratesNote: string;
-  result: DutyResult;
+  /** Null until the customer has paid for this VIN; `locked` is shown instead. */
+  result: DutyResult | null;
+  loading: boolean;
+  locked: ReactNode;
 }
 
 const usd = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
@@ -34,7 +36,7 @@ function NumberField(props: { label: string; value: number; onChange: (n: number
   );
 }
 
-export function DutyCalculator({ input, onInputChange, rates, ratesUpdatedAt, ratesNote, result }: Props) {
+export function DutyCalculator({ input, onInputChange, ratesUpdatedAt, ratesNote, result, loading, locked }: Props) {
   const [showSources, setShowSources] = useState(false);
   const set = <K extends keyof DutyInput>(key: K, value: DutyInput[K]) => onInputChange({ ...input, [key]: value });
   const age = ratesAgeDays(ratesUpdatedAt);
@@ -111,75 +113,81 @@ export function DutyCalculator({ input, onInputChange, rates, ratesUpdatedAt, ra
         <NumberField label="Exchange rate (GH₵ per USD)" value={input.exchangeRate} onChange={(n) => set("exchangeRate", n)} step={0.01} hint="Use the customs rate on the ICUMS portal for the week." />
       </div>
 
-      {result.warnings.map((w, i) => (
-        <p key={w} className={result.blockedByAge && i === 0 ? "notice warn" : "notice"}>
-          {w}
-        </p>
-      ))}
-
-      <table className="breakdown">
-        <tbody>
-          <tr className="sub">
-            <td>Vehicle age on arrival</td>
-            <td colSpan={2}>{result.ageYears.toFixed(1)} years</td>
-          </tr>
-          {input.valuationMode === "hdv" && (
-            <tr className="sub">
-              <td>Depreciation allowed</td>
-              <td colSpan={2}>{pct(result.depreciationRate)}</td>
-            </tr>
-          )}
-          <tr className="sub">
-            <td>FOB value</td>
-            <td colSpan={2}>{usd(result.fobUsd)}</td>
-          </tr>
-          <tr className="sub">
-            <td>CIF value (FOB + freight + insurance)</td>
-            <td colSpan={2}>{usd(result.cifUsd)}</td>
-          </tr>
-        </tbody>
-        <thead>
-          <tr>
-            <th>Charge</th>
-            <th>Rate</th>
-            <th>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {result.lines.map((l) => (
-            <tr key={l.key}>
-              <td>
-                {l.label}
-                <small className="muted"> on {l.base}</small>
-              </td>
-              <td>{pct(l.rate)}</td>
-              <td>
-                {usd(l.usd)}
-                {input.exchangeRate > 0 && <small className="muted block">{ghs(l.usd * input.exchangeRate)}</small>}
-              </td>
-            </tr>
+      {!result ? (
+        loading ? <p className="muted">Calculating…</p> : locked
+      ) : (
+        <>
+          {result.warnings.map((w, i) => (
+            <p key={w} className={result.blockedByAge && i === 0 ? "notice warn" : "notice"}>
+              {w}
+            </p>
           ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td>Estimated duty and taxes</td>
-            <td />
-            <td>
-              <strong>{usd(result.totalUsd)}</strong>
-              {input.exchangeRate > 0 && <strong className="block">{ghs(result.totalGhs)}</strong>}
-            </td>
-          </tr>
-          <tr className="sub">
-            <td>Landed cost (CIF + duty and taxes)</td>
-            <td />
-            <td>{usd(result.landedUsd)}</td>
-          </tr>
-        </tfoot>
-      </table>
-      <p className="muted small">
-        Excludes clearing agent fees, port handling and storage, DVLA registration and roadworthy fees. This is an estimate;
-        the ICUMS assessment at the port is final.
-      </p>
+
+          <table className="breakdown">
+            <tbody>
+              <tr className="sub">
+                <td>Vehicle age on arrival</td>
+                <td colSpan={2}>{result.ageYears.toFixed(1)} years</td>
+              </tr>
+              {input.valuationMode === "hdv" && (
+                <tr className="sub">
+                  <td>Depreciation allowed</td>
+                  <td colSpan={2}>{pct(result.depreciationRate)}</td>
+                </tr>
+              )}
+              <tr className="sub">
+                <td>FOB value</td>
+                <td colSpan={2}>{usd(result.fobUsd)}</td>
+              </tr>
+              <tr className="sub">
+                <td>CIF value (FOB + freight + insurance)</td>
+                <td colSpan={2}>{usd(result.cifUsd)}</td>
+              </tr>
+            </tbody>
+            <thead>
+              <tr>
+                <th>Charge</th>
+                <th>Rate</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.lines.map((l) => (
+                <tr key={l.key}>
+                  <td>
+                    {l.label}
+                    <small className="muted"> on {l.base}</small>
+                  </td>
+                  <td>{pct(l.rate)}</td>
+                  <td>
+                    {usd(l.usd)}
+                    {input.exchangeRate > 0 && <small className="muted block">{ghs(l.usd * input.exchangeRate)}</small>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td>Estimated duty and taxes</td>
+                <td />
+                <td>
+                  <strong>{usd(result.totalUsd)}</strong>
+                  {input.exchangeRate > 0 && <strong className="block">{ghs(result.totalGhs)}</strong>}
+                </td>
+              </tr>
+              <tr className="sub">
+                <td>Landed cost (CIF + duty and taxes)</td>
+                <td />
+                <td>{usd(result.landedUsd)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          <p className="muted small">
+            Excludes clearing agent fees, port handling and storage, DVLA registration and roadworthy fees. This is an estimate;
+            the ICUMS assessment at the port is final.
+          </p>
+        </>
+      )}
 
       <p className={age === null || age > 7 ? "notice" : "muted small"}>
         {age === null
@@ -187,11 +195,6 @@ export function DutyCalculator({ input, onInputChange, rates, ratesUpdatedAt, ra
           : `Rates and exchange rate updated ${age === 0 ? "today" : `${age} day${age === 1 ? "" : "s"} ago`} (${new Date(ratesUpdatedAt).toLocaleDateString()}).`}
         {age !== null && age > 7 && " They are more than a week old, so check the ICUMS portal before relying on them."}
         {ratesNote && <span className="block">{ratesNote}</span>}
-        {" "}
-        <span className="block">
-          VAT {pct(rates.vat)}, NHIL {pct(rates.nhil)}, GETFund {pct(rates.getfund)}; car duty{" "}
-          {rates.passengerDutyBands.map((b) => pct(b.rate)).join(" / ")} by engine size.
-        </span>
       </p>
       <button className="link" onClick={() => setShowSources(!showSources)}>
         {showSources ? "Hide" : "Show"} where these figures come from

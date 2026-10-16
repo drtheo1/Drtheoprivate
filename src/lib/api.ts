@@ -1,4 +1,5 @@
 import { normalizeRates, type FuelType, type GhanaRates, type RatesDoc, type VehicleCategory } from "../config/ghanaRates";
+import type { DutyInput, DutyResult } from "./duty";
 
 export interface DecodedVehicle {
   make: string;
@@ -65,8 +66,36 @@ export interface HistoryReport {
 
 export interface HistoryStatus {
   configured: boolean;
-  accessCodeRequired: boolean;
+  paid: boolean;
   report: HistoryReport | null;
+}
+
+/** What anyone can see about the weekly rates; the full table stays on the server. */
+export interface PublicRates {
+  exchangeRate: number;
+  note: string;
+  updatedAt: string;
+  maxImportAgeYears: number;
+  ageLimitEffective: string;
+}
+
+export type Product = "duty" | "history" | "bundle";
+
+export interface Prices {
+  enabled: boolean;
+  free: boolean;
+  currency: "GHS";
+  duty: number;
+  history: number;
+  bundle: number;
+  dutyAccessDays: number;
+}
+
+export interface Purchase {
+  token: string;
+  vin: string;
+  grants: ("duty" | "history")[];
+  paidAt: string;
 }
 
 async function get<T>(url: string, init?: RequestInit): Promise<T> {
@@ -137,15 +166,31 @@ export const api = {
     (await get<{ results?: Complaint[] }>(`/api/complaints?${vehicleQuery(v)}`)).results ?? [],
   ratings: async (v: DecodedVehicle) =>
     (await get<{ results?: SafetyRating[] }>(`/api/ratings?${vehicleQuery(v)}`)).results ?? [],
-  history: (vin: string) => get<HistoryStatus>(`/api/history/${vin}`),
-  pullHistory: (vin: string, accessCode: string) =>
-    get<HistoryStatus>(`/api/history/${vin}`, {
+  history: (vin: string, tokens: string) => get<HistoryStatus>(`/api/history/${vin}`, { headers: { "x-access-token": tokens } }),
+  pullHistory: (vin: string, tokens: string) =>
+    get<HistoryStatus>(`/api/history/${vin}`, { method: "POST", headers: { "x-access-token": tokens } }),
+  duty: (vin: string, input: DutyInput, tokens: string) =>
+    get<{ result: DutyResult; ratesUpdatedAt: string }>("/api/duty", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-access-token": tokens },
+      body: JSON.stringify({ vin, input }),
+    }),
+  prices: () => get<Prices>("/api/prices"),
+  checkout: (vin: string, product: Product, email: string) =>
+    get<{ authorizationUrl: string; reference: string }>("/api/checkout", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ accessCode }),
+      body: JSON.stringify({ vin, product, email }),
     }),
-  rates: async (): Promise<RatesDoc | null> => {
-    const doc = await get<Partial<RatesDoc>>("/api/rates");
+  verify: (reference: string) =>
+    get<Purchase>("/api/checkout/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reference }),
+    }),
+  rates: () => get<PublicRates>("/api/rates"),
+  adminRates: async (password: string): Promise<RatesDoc | null> => {
+    const doc = await get<Partial<RatesDoc>>("/api/rates", { headers: { authorization: `Bearer ${password}` } });
     if (!doc.rates) return null;
     return { rates: normalizeRates(doc.rates), exchangeRate: doc.exchangeRate ?? 0, note: doc.note ?? "", updatedAt: doc.updatedAt ?? "" };
   },

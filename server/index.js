@@ -6,7 +6,10 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mapReport, providerName, pullReport } from "./history.js";
+import { handleWebhook, hasAccess, prices, startCheckout, verifyCheckout } from "./payments.js";
 import { loadHistory, loadRates, pullsToday, recordPull, saveHistory, saveRates } from "./store.js";
+import { calculateDuty } from "../src/lib/duty.ts";
+import { DEFAULT_RATES, normalizeRates } from "../src/config/ghanaRates.ts";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
@@ -58,7 +61,7 @@ function secretMatches(given, expected) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-async function readBody(req) {
+async function readRaw(req) {
   let size = 0;
   const chunks = [];
   for await (const chunk of req) {
@@ -66,11 +69,29 @@ async function readBody(req) {
     if (size > 64 * 1024) throw httpError(413, "Request too large");
     chunks.push(chunk);
   }
+  return Buffer.concat(chunks);
+}
+
+async function readBody(req) {
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-  } catch {
+    return JSON.parse((await readRaw(req)).toString("utf8") || "{}");
+  } catch (err) {
+    if (err.status) throw err;
     throw httpError(400, "Body must be JSON");
   }
+}
+
+const isAdmin = (req) => secretMatches(req.headers.authorization?.replace(/^Bearer /, ""), process.env.ADMIN_TOKEN);
+
+function appUrl(req) {
+  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
+  const proto = req.headers["x-forwarded-proto"]?.split(",")[0] ?? "http";
+  return `${proto}://${req.headers.host}`;
+}
+
+async function currentRates() {
+  const doc = await loadRates();
+  return { doc, rates: normalizeRates(doc?.rates ?? DEFAULT_RATES) };
 }
 
 /** Accepts only numbers (null for open ended band limits) and the effective date string. */
@@ -96,11 +117,24 @@ function validateRates(rates) {
 }
 
 async function handleRates(req) {
-  if (req.method === "GET") return (await loadRates()) ?? { rates: null };
+  if (req.method === "GET") {
+    const { doc, rates } = await currentRates();
+    // The full table is what customers pay to have applied, so only the admin sees it.
+    if (req.headers.authorization) {
+      if (!isAdmin(req)) throw httpError(401, "Wrong admin password");
+      return doc ?? { rates: null };
+    }
+    return {
+      exchangeRate: doc?.exchangeRate ?? 0,
+      note: doc?.note ?? "",
+      updatedAt: doc?.updatedAt ?? "",
+      maxImportAgeYears: rates.maxImportAgeYears,
+      ageLimitEffective: rates.ageLimitEffective,
+    };
+  }
   if (req.method !== "PUT") throw httpError(405, "Method not allowed");
   if (!process.env.ADMIN_TOKEN) throw httpError(503, "Set ADMIN_TOKEN on the server to enable rate updates");
-  const auth = req.headers.authorization?.replace(/^Bearer /, "");
-  if (!secretMatches(auth, process.env.ADMIN_TOKEN)) throw httpError(401, "Wrong admin password");
+  if (!isAdmin(req)) throw httpError(401, "Wrong admin password");
   const body = await readBody(req);
   validateRates(body.rates);
   if (!(Number(body.exchangeRate) > 0)) throw httpError(400, "exchangeRate must be above 0");
@@ -117,29 +151,59 @@ async function handleRates(req) {
 async function handleHistory(req, vin) {
   const provider = providerName();
   const cached = await loadHistory(vin);
+  const paid = await hasAccess(req.headers["x-access-token"], vin, "history");
   const view = (entry) => ({
     configured: Boolean(provider),
-    accessCodeRequired: Boolean(process.env.HISTORY_ACCESS_CODE),
-    report: entry ? { ...mapReport(entry.provider, entry.raw), pulledAt: entry.pulledAt } : null,
+    paid,
+    report: entry && paid ? { ...mapReport(entry.provider, entry.raw), pulledAt: entry.pulledAt } : null,
   });
   if (req.method === "GET") return view(cached);
   if (req.method !== "POST") throw httpError(405, "Method not allowed");
   if (!provider) throw httpError(503, "No history provider is configured");
-  // A cached report is returned for free; only a new VIN is charged.
+  if (!paid) throw httpError(402, "Buy the history report for this VIN first");
+  // A report already pulled for this VIN is reused, so the provider is only charged once.
   if (cached) return view(cached);
 
-  const body = await readBody(req);
-  if (process.env.HISTORY_ACCESS_CODE && !secretMatches(body.accessCode, process.env.HISTORY_ACCESS_CODE)) {
-    throw httpError(401, "Wrong access code");
-  }
   if ((await pullsToday()) >= HISTORY_DAILY_LIMIT) {
-    throw httpError(429, "Daily report limit reached. Raise HISTORY_DAILY_LIMIT or try tomorrow.");
+    throw httpError(429, "The report service is busy. Your purchase is saved; try again in a few hours.");
   }
   const raw = await pullReport(provider, vin);
   await recordPull();
   const entry = { provider, vin, pulledAt: new Date().toISOString(), raw };
   await saveHistory(vin, entry);
   return view(entry);
+}
+
+const CATEGORIES = new Set(["passenger", "pickup", "bus", "truck", "motorcycle"]);
+const FUELS = new Set(["petrol", "diesel", "hybrid", "electric"]);
+
+function validateDutyInput(i) {
+  if (!i || typeof i !== "object") throw httpError(400, "input is required");
+  const num = (k, max) => {
+    const n = Number(i[k] ?? 0);
+    if (!Number.isFinite(n) || n < 0 || n > max) throw httpError(400, `${k} is out of range`);
+    return n;
+  };
+  if (!CATEGORIES.has(i.category)) throw httpError(400, "Unknown vehicle category");
+  if (!FUELS.has(i.fuel)) throw httpError(400, "Unknown fuel");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(i.arrivalDate ?? "")) throw httpError(400, "arrivalDate must be yyyy-mm-dd");
+  const year = num("manufactureYear", 2100);
+  if (year < 1950) throw httpError(400, "manufactureYear is out of range");
+  const month = i.manufactureMonth == null ? undefined : num("manufactureMonth", 12) || undefined;
+  return {
+    category: i.category,
+    fuel: i.fuel,
+    engineCc: num("engineCc", 20000),
+    manufactureYear: year,
+    manufactureMonth: month,
+    arrivalDate: i.arrivalDate,
+    valuationMode: i.valuationMode === "hdv" ? "hdv" : "invoice",
+    fobUsd: num("fobUsd", 1e7),
+    hdvUsd: num("hdvUsd", 1e7),
+    freightUsd: num("freightUsd", 1e6),
+    insuranceUsd: num("insuranceUsd", 1e6),
+    exchangeRate: num("exchangeRate", 1e4),
+  };
 }
 
 function vehicleParams(q) {
@@ -158,6 +222,25 @@ async function handleApi(req, url) {
   const q = url.searchParams;
 
   if (route === "rates") return handleRates(req);
+  if (route === "prices") return prices();
+  if (route === "paystack" && parts[2] === "webhook" && req.method === "POST") {
+    return handleWebhook(await readRaw(req), req.headers["x-paystack-signature"]);
+  }
+  if (route === "checkout" && req.method === "POST") {
+    const body = await readBody(req);
+    if (parts[2] === "verify") return verifyCheckout(body.reference);
+    const vin = String(body.vin ?? "").toUpperCase();
+    if (!VIN_RE.test(vin)) throw httpError(400, "Invalid VIN");
+    return startCheckout({ vin, product: body.product, email: body.email }, appUrl(req));
+  }
+  if (route === "duty" && req.method === "POST") {
+    const body = await readBody(req);
+    const vin = String(body.vin ?? "").toUpperCase();
+    if (!VIN_RE.test(vin)) throw httpError(400, "Invalid VIN");
+    if (!(await hasAccess(req.headers["x-access-token"], vin, "duty"))) throw httpError(402, "Buy the duty estimate for this VIN first");
+    const { doc, rates } = await currentRates();
+    return { result: calculateDuty(validateDutyInput(body.input), rates), ratesUpdatedAt: doc?.updatedAt ?? "" };
+  }
   if (route === "decode" || route === "history") {
     const vin = (parts[2] ?? "").toUpperCase();
     if (!VIN_RE.test(vin)) throw httpError(400, "Invalid VIN");

@@ -12,7 +12,7 @@ A web app for anyone buying a used vehicle in the United States or Canada to shi
 
 ## Running it
 
-Requires Node 20 or newer.
+Requires Node 22.6 or newer (the server reuses the TypeScript duty calculator directly).
 
 ```bash
 npm install
@@ -36,9 +36,41 @@ Set these as environment variables on your host.
 | `HISTORY_PROVIDER` | `vinaudit` (recommended) or `generic`. |
 | `VINAUDIT_API_KEY`, `VINAUDIT_USER`, `VINAUDIT_PASS` | From your VinAudit API account. |
 | `VINAUDIT_MODE` | Set to `test` while checking the setup; VinAudit returns sample data and does not charge. Remove it to go live. |
-| `HISTORY_ACCESS_CODE` | Optional. When set, users must enter this code before a paid report is pulled. |
+| `PAYSTACK_SECRET_KEY` | Secret key from the Paystack dashboard. Use the `sk_test_` key until you are ready to take real money. |
+| `APP_URL` | Public address of the site, e.g. `https://yourdomain.com`. Customers return here after paying. |
+| `SESSION_SECRET` | Long random text used to sign customers' access tokens. Keep it the same across restarts. |
+| `PRICE_DUTY_GHS`, `PRICE_HISTORY_GHS`, `PRICE_BUNDLE_GHS` | Prices in cedis (defaults 20, 60 and 70). |
+| `DUTY_ACCESS_DAYS` | How long a paid duty estimate stays open for that VIN (default 30). |
+| `FREE_ACCESS` | Set to `1` on a local test machine only, to unlock everything without paying. |
 | `HISTORY_DAILY_LIMIT` | Maximum new paid reports per day (default 50), to protect the bill. |
 | `PORT` | Port to listen on (default 8787). |
+
+## Payments
+
+Customers pay through Paystack with mobile money (MTN, Telecel, AirtelTigo) or card, in cedis.
+
+| Free | Paid, per VIN |
+| --- | --- |
+| VIN check, vehicle details, recalls, complaints, crash ratings, the age check | Duty estimate (open for 30 days, so customers can try different prices and shipping costs) |
+| | Full history report |
+| | Both together at a discount |
+
+How it works:
+
+1. The customer checks a VIN, picks what to buy, enters an email for the receipt and is sent to Paystack.
+2. After paying they come back to the site, the payment is confirmed with Paystack, and the results unlock.
+3. The purchase is remembered in that browser. On another device, the customer clicks **Already paid on another device?** and enters the reference from their Paystack receipt.
+
+The duty breakdown is calculated on the server and only sent to customers who have paid, and the full rate table is visible only on the admin page, so the paywall cannot be bypassed from the browser.
+
+Setting up Paystack:
+
+1. Create a Paystack business account for Ghana and complete verification.
+2. Put the secret key in `PAYSTACK_SECRET_KEY` and set `APP_URL` and `SESSION_SECRET`.
+3. In the Paystack dashboard, set the webhook URL to `https://yourdomain.com/api/paystack/webhook`. This confirms payments even when a customer closes the page before returning.
+4. Test with the `sk_test_` key and Paystack's test cards and test mobile money numbers, then switch to the live key.
+
+Payment records are saved in `DATA_DIR/purchases/`, one file per payment, with the VIN, product, amount and email.
 
 ## Weekly rate update
 
@@ -50,8 +82,9 @@ The values in `src/config/ghanaRates.ts` are only the fallback used before the f
 
 Reports come from VinAudit, an NMVTIS approved provider. They cover title brands (salvage, flood, rebuilt, junk), insurance and junk yard records, salvage auction listings, accidents, theft, odometer readings and sale listings.
 
-* A report is only pulled when someone clicks **Get full history report**, never on a plain VIN check.
-* Every report is saved on the server. Opening the same VIN again is free, for any user.
+* A report is only pulled after a customer has paid for it, never on a plain VIN check.
+* Every report is saved on the server, so VinAudit only charges you once per VIN even if many customers buy it. Each customer still pays you.
+* If VinAudit is down or the daily limit is reached, the customer keeps their purchase and the report loads when they return.
 * The raw response is stored, so the way it is displayed can be improved later without paying again.
 * Anything the report shows is fed into the verdict automatically (for example a salvage brand gives "Do not ship").
 

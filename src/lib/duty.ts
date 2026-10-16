@@ -60,6 +60,15 @@ export function vehicleAgeYears(year: number, month: number | undefined, onDate:
   return Math.max(0, Math.round(years * 100) / 100);
 }
 
+/** Over the age limit on arrival, once the limit is in force. */
+export function isBlockedByAge(
+  ageYears: number,
+  arrivalDate: string,
+  limits: Pick<GhanaRates, "maxImportAgeYears" | "ageLimitEffective">,
+): boolean {
+  return arrivalDate >= limits.ageLimitEffective && ageYears > limits.maxImportAgeYears;
+}
+
 export function importDutyRate(rates: GhanaRates, category: VehicleCategory, fuel: FuelType, engineCc: number): number {
   if (fuel === "electric" && category === "passenger") return rates.electricDuty;
   if (category !== "passenger") return rates.categoryDuty[category];
@@ -80,8 +89,7 @@ export function calculateDuty(input: DutyInput, rates: GhanaRates): DutyResult {
   const insuranceUsd = input.insuranceUsd > 0 ? input.insuranceUsd : (fobUsd + freightUsd) * 0.01;
   const cifUsd = fobUsd + freightUsd + insuranceUsd;
 
-  const ageLimitApplies = input.arrivalDate >= rates.ageLimitEffective;
-  const blockedByAge = ageLimitApplies && ageYears > rates.maxImportAgeYears;
+  const blockedByAge = isBlockedByAge(ageYears, input.arrivalDate, rates);
   if (blockedByAge) {
     warnings.push(
       `This vehicle will be about ${ageYears.toFixed(1)} years old on arrival. From ${rates.ageLimitEffective} the GSA pre export verification programme rejects used vehicles over ${rates.maxImportAgeYears} years, so it may not be cleared at all. The figures below show what the older penalty regime would have charged.`,

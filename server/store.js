@@ -48,3 +48,7 @@ export async function pullsToday() {
   const usage = (await readJson(usageFile())) ?? {};
   return usage[new Date().toISOString().slice(0, 10)] ?? 0;
 }
+
+const purchaseFile = (reference) => path.join(DATA_DIR, "purchases", `${reference}.json`);
+export const loadPurchase = (reference) => readJson(purchaseFile(reference));
+export const savePurchase = (purchase) => writeJson(purchaseFile(purchase.reference), purchase);

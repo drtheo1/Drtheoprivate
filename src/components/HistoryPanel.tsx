@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { Complaint, HistoryReport, Recall, SafetyRating } from "../lib/api";
 import { FLAG_LABELS, type HistoryFlags } from "../lib/eligibility";
 
@@ -9,9 +9,11 @@ interface Props {
   ratings: SafetyRating[] | null;
   report: HistoryReport | null;
   providerConfigured: boolean | null;
-  accessCodeRequired: boolean;
+  /** The customer has bought the history report for this VIN. */
+  paid: boolean;
   pulling: boolean;
-  onPullReport: (accessCode: string) => void;
+  onPullReport: () => void;
+  paywall: ReactNode;
   flags: HistoryFlags;
   onFlagsChange: (flags: HistoryFlags) => void;
   errors: Record<string, string>;
@@ -36,7 +38,6 @@ function formatDate(d?: string) {
 export function HistoryPanel(props: Props) {
   const { vin, recalls, complaints, ratings, report, providerConfigured, flags, onFlagsChange, errors } = props;
   const [showAllComplaints, setShowAllComplaints] = useState(false);
-  const [accessCode, setAccessCode] = useState("");
   const serious = (complaints ?? []).filter((c) => c.crash || c.fire || c.numberOfInjuries > 0 || c.numberOfDeaths > 0);
   const shown = showAllComplaints ? complaints ?? [] : serious.slice(0, 5);
 
@@ -70,29 +71,23 @@ export function HistoryPanel(props: Props) {
             </ol>
           )}
         </div>
-      ) : providerConfigured ? (
-        <form
-          className="pull"
-          onSubmit={(e) => {
-            e.preventDefault();
-            props.onPullReport(accessCode);
-          }}
-        >
-          <p className="muted">
-            Title brands (salvage, flood, rebuilt), accidents, theft, odometer readings and auction records from every US state.
-            Each new VIN is a paid report; a VIN pulled before opens for free.
-          </p>
-          {props.accessCodeRequired && (
-            <label className="field">
-              <span>Access code</span>
-              <input type="password" required value={accessCode} onChange={(e) => setAccessCode(e.target.value)} />
-            </label>
-          )}
-          <button type="submit" disabled={props.pulling}>
+      ) : providerConfigured && props.paid ? (
+        <div className="pull">
+          <p className="muted">Your report is paid for. If it did not load, try again.</p>
+          <button onClick={props.onPullReport} disabled={props.pulling}>
             {props.pulling ? "Pulling report…" : "Get full history report"}
           </button>
           {errors.history && <p className="notice warn">{errors.history}</p>}
-        </form>
+        </div>
+      ) : providerConfigured ? (
+        <>
+          <p className="muted">
+            Title brands (salvage, flood, rebuilt), insurance write offs, salvage auction listings, accidents, theft and odometer
+            readings from every US state, through NMVTIS.
+          </p>
+          {props.paywall}
+          {errors.history && <p className="notice warn">{errors.history}</p>}
+        </>
       ) : (
         <p className="muted">
           {providerConfigured === false

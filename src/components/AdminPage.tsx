@@ -59,17 +59,32 @@ export function AdminPage() {
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    api
-      .rates()
-      .then((doc) => {
-        if (!doc) return;
+  const [loaded, setLoaded] = useState(false);
+
+  async function signIn(pw: string) {
+    setStatus(null);
+    try {
+      const doc = await api.adminRates(pw);
+      if (doc) {
         setRates(doc.rates);
         setExchangeRate(doc.exchangeRate);
         setNote(doc.note);
         setUpdatedAt(doc.updatedAt);
-      })
-      .catch((err) => setStatus({ ok: false, text: `Could not load current rates: ${err.message}` }));
+      }
+      try {
+        sessionStorage.setItem(PASSWORD_KEY, pw);
+      } catch {
+        /* storage unavailable */
+      }
+      setLoaded(true);
+    } catch (err) {
+      setStatus({ ok: false, text: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  useEffect(() => {
+    if (password) void signIn(password);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const setBand = (key: "passengerDutyBands" | "depreciation" | "overagePenalty", i: number, rate: number) =>
@@ -82,17 +97,36 @@ export function AdminPage() {
     try {
       const doc = await api.saveRates(password, rates, exchangeRate, note);
       setUpdatedAt(doc.updatedAt);
-      try {
-        sessionStorage.setItem(PASSWORD_KEY, password);
-      } catch {
-        /* storage unavailable */
-      }
       setStatus({ ok: true, text: "Saved. Everyone using the app now sees these rates." });
     } catch (err) {
       setStatus({ ok: false, text: err instanceof Error ? err.message : String(err) });
     } finally {
       setSaving(false);
     }
+  }
+
+  if (!loaded) {
+    return (
+      <main className="admin">
+        <form
+          className="card"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void signIn(password);
+          }}
+        >
+          <h1>Weekly rate update</h1>
+          <label className="field">
+            <span>Admin password</span>
+            <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          <div className="actions">
+            <button type="submit">Sign in</button>
+          </div>
+          {status && <p className="notice warn">{status.text}</p>}
+        </form>
+      </main>
+    );
   }
 
   return (
@@ -168,10 +202,6 @@ export function AdminPage() {
         </div>
 
         <div className="actions">
-          <label className="field">
-            <span>Admin password</span>
-            <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          </label>
           <button type="submit" disabled={saving}>
             {saving ? "Saving…" : "Save rates"}
           </button>

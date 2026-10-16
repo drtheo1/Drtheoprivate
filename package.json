@@ -1,12 +1,13 @@
 {
   "name": "ghana-vehicle-duty-checker",
   "private": true,
+  "engines": { "node": ">=22.6" },
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "start": "node server/index.js",
+    "start": "node --experimental-strip-types --disable-warning=ExperimentalWarning server/index.js",
     "test": "vitest run",
     "typecheck": "tsc -b"
   },
