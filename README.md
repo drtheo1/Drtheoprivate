@@ -25,6 +25,22 @@ For development run `npm start` and `npm run dev` in two terminals; Vite forward
 
 The server has no dependencies and can be deployed to any Node host (Render, Railway, Fly.io, a VPS). Set `PORT` if the host requires it.
 
+## Deploying to Render
+
+The repository includes `render.yaml`, which sets up the whole service: a small server in Frankfurt (the Render region closest to Ghana), a 1 GB persistent disk for rates, payments and reports, and all the settings below.
+
+1. Sign up at render.com with your GitHub account and allow Render to see the `Drtheoprivate` repository.
+2. In the dashboard choose **New**, then **Blueprint**, pick the repository and the branch that holds the app (`main` once the pull request is merged).
+3. Render asks for the values it cannot fill in itself. Fill in `PAYSTACK_SECRET_KEY` and the VinAudit details if you have them. Anything you leave empty can be added later under the service's **Environment** tab. Leave `APP_URL` empty for now.
+4. Click **Apply**. The first build takes a few minutes. Your site will be at an address like `https://ghana-vehicle-duty-checker.onrender.com`.
+5. Put that address (or your own domain, once connected) into `APP_URL` and save; Render restarts the service.
+6. Find the admin password: open the service, go to **Environment**, and reveal `ADMIN_TOKEN`. Use it at `/#admin` to save this week's rates.
+7. In the Paystack dashboard, set the webhook URL to `<your address>/api/paystack/webhook`.
+
+Until a Paystack key is set, the site works but the paid sections say payments are not available. Until VinAudit details are set, the history report section shows only the free links and checklist.
+
+To use your own domain, add it under the service's **Settings**, then **Custom Domains**, and follow Render's DNS instructions.
+
 ## Server settings
 
 Set these as environment variables on your host.
