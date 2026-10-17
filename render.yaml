@@ -1,0 +1,52 @@
+# Render Blueprint: in the Render dashboard choose New > Blueprint and pick this repository.
+services:
+  - type: web
+    name: ghana-vehicle-duty-checker
+    runtime: node
+    # A persistent disk needs a paid instance; starter is the smallest.
+    plan: starter
+    # Frankfurt is the Render region closest to Ghana.
+    region: frankfurt
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/prices
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: DATA_DIR
+        value: /var/data
+      # Generated once by Render; read the admin password in the service's Environment tab.
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      # Filled in by you in the dashboard (Render asks for these when the Blueprint is created).
+      - key: APP_URL
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: VINAUDIT_API_KEY
+        sync: false
+      - key: VINAUDIT_USER
+        sync: false
+      - key: VINAUDIT_PASS
+        sync: false
+      - key: HISTORY_PROVIDER
+        value: vinaudit
+      # Remove this once your VinAudit test reports look right, to start real reports.
+      - key: VINAUDIT_MODE
+        value: test
+      - key: HISTORY_DAILY_LIMIT
+        value: "50"
+      - key: PRICE_DUTY_GHS
+        value: "20"
+      - key: PRICE_HISTORY_GHS
+        value: "60"
+      - key: PRICE_BUNDLE_GHS
+        value: "70"
+      - key: DUTY_ACCESS_DAYS
+        value: "30"
